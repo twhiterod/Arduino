@@ -61,6 +61,8 @@ public:
         ++_ssl_ctx_refcnt;
 
         _rxbuf = new cbuf(SSL_RX_BUF_SIZE);
+        _sslData = 0;
+        _sslDataBytes = 0;
     }
 
     ~SSLContext() {
@@ -129,20 +131,31 @@ public:
     }
 
 protected:
+	uint8_t* _sslData;
+	int _sslDataBytes;
+
     int _readAll() {
         if (!_ssl)
             return 0;
 
-        uint8_t* data;
-        int rc = ssl_read(_ssl, &data);
-        if (rc <= 0) {
-            if (rc < SSL_OK && rc != SSL_CLOSE_NOTIFY && rc != SSL_ERROR_CONN_LOST) {
-                ssl_free(_ssl);
-                _ssl = nullptr;
-            }
-            return 0;
-        }
-
+        int rc = 0;
+        if (_sslDataBytes > 0)
+        {
+	    	rc = _sslDataBytes;
+		}
+		else /* no locally buffered data */
+		{
+			rc = ssl_read(_ssl, &_sslData);
+			if (rc <= 0) {
+				if (rc < SSL_OK && rc != SSL_CLOSE_NOTIFY && rc != SSL_ERROR_CONN_LOST) {
+					ssl_free(_ssl);
+					_ssl = nullptr;
+				}
+				_sslData = 0;
+				return 0;
+			}
+			_sslDataBytes = rc;
+		}
 
         if (rc > _rxbuf->room()) {
             DEBUGV("WiFiClientSecure rx overflow");
@@ -151,8 +164,13 @@ protected:
         int result = 0;
         size_t sizeBefore = _rxbuf->getSize();
         if (rc)
-            result = _rxbuf->write(reinterpret_cast<const char*>(data), rc);
-        DEBUGV("*** rb: %d + %d = %d\r\n", sizeBefore, rc, _rxbuf->getSize());
+            result = _rxbuf->write(reinterpret_cast<const char*>(_sslData), rc);
+        _sslDataBytes -= result;
+        if (_sslDataBytes <= 0)
+        	_sslData = 0;
+        else
+	        _sslData += result;
+        DEBUGV("*** rb: %d + %d = %d buffered %d\r\n", sizeBefore, rc, _rxbuf->getSize(), _sslDataBytes);
         return result;
     }
 
